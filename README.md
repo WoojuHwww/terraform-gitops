@@ -26,17 +26,9 @@ GitHub Actions + OIDC 기반으로 **안전하게 자동화된 인프라 운영 
 
 ---
 
-## 🏗️ Architecture Overview
+## 🏗️ Architecture Diagram
 
 ![Architecture](docs/architecture.png)
-
-GitHub → GitHub Actions (OIDC)
-↓
-Terraform Plan / Apply
-↓
-AWS Infrastructure Provisioning
-↓
-VPC + EKS + RDS + ECR + S3
 
 
 ---
@@ -72,18 +64,19 @@ VPC + EKS + RDS + ECR + S3
 ## 📁 Directory Structure
 
 
+```text
 .
-├── .github/workflows # CI/CD (Terraform 실행)
-├── bootstrap/backend # Remote State 초기 구성
-├── environments/dev # 실제 인프라 구성
-├── modules # 재사용 가능한 Terraform 모듈
-│ ├── vpc
-│ ├── eks
-│ ├── rds
-│ ├── ecr
-│ ├── s3
-│ ├── bastion
-│ └── iam
+├── .github/workflows        # CI/CD (Terraform 실행)
+├── bootstrap/backend        # Remote State 초기 구성
+├── environments/dev         # 실제 인프라 구성
+├── modules                  # 재사용 가능한 Terraform 모듈
+│   ├── vpc
+│   ├── eks
+│   ├── rds
+│   ├── ecr
+│   ├── s3
+│   ├── bastion
+│   └── iam
 └── README.md
 
 
@@ -157,15 +150,31 @@ VPC + EKS + RDS + ECR + S3
 ### 📌 Flow
 
 
-Code Push
-↓
-GitHub Actions
-↓
-Terraform Validate / Plan
-↓
-(Manual 승인)
-↓
-Terraform Apply
+## 📌 Flow
+
+┌─────────────┐
+│  Code Push  │
+└──────┬──────┘
+       │
+       ▼
+┌──────────────────┐
+│ GitHub Actions   │
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│ Terraform Validate/Plan  │
+└──────────┬───────────────┘
+           │
+           ▼
+┌──────────────────┐
+│ Manual Approval  │
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│ Terraform Apply  │
+└──────────────────┘
 
 
 ---
@@ -215,7 +224,3 @@ Terraform Apply
 - Secret 관리 체계 개선
 
 ---
-
-## 💡 One-Line Summary (포트폴리오 핵심)
-
-👉 **"Terraform과 OIDC 기반 GitHub Actions를 활용해 안전하고 자동화된 AWS 인프라 운영 환경을 구축한 프로젝트"**
