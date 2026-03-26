@@ -1,245 +1,189 @@
-# 🚀 Terraform GitOps Project
+# Terraform AWS Infrastructure Project
 
-> **Last Updated:** 2026-03-18
-> Terraform + AWS + GitHub Actions(OIDC)를 활용한 **GitOps 기반 인프라 자동화 프로젝트**
+Terraform로 AWS 인프라를 코드로 관리하고, GitHub Actions OIDC 기반으로 변경 사항을 검증 및 반영할 수 있도록 구성한 인프라 프로젝트입니다.  
+단순 리소스 생성보다도, 실제 운영을 고려한 디렉터리 분리, 원격 상태 관리, 모듈화, 접근 제어 흐름을 설계하는 데 초점을 맞췄습니다.
 
----
+## Overview
 
-## 📌 프로젝트 개요
+이 프로젝트는 `dev` 환경 기준으로 다음 인프라를 구성합니다.
 
-이 프로젝트는 다음을 목표로 합니다:
+- VPC, Public / Private App / Private DB 서브넷 분리
+- NAT Gateway, Route Table을 포함한 네트워크 계층 구성
+- 운영 접속용 Bastion Host
+- EKS 클러스터와 Managed Node Group
+- Private Subnet 기반 RDS
+- 애플리케이션 이미지 저장용 ECR
+- 업로더 권한과 공개 조회 정책을 분리한 S3 버킷
+- Terraform remote state용 S3 + DynamoDB bootstrap 구성
+- GitHub Actions와 AWS OIDC 연동을 통한 CI 기반 Terraform 실행
 
-* Terraform을 통한 AWS 인프라 코드화 (IaC)
-* GitHub Actions + OIDC 기반 **보안 자동 배포**
-* S3 + DynamoDB를 활용한 **State 관리 및 Locking**
-* GitOps 방식으로 **인프라 변경 이력 관리**
+## Architecture
 
----
+전체 구조는 크게 네 가지 층으로 나뉩니다.
 
-## ⚠️ 0. 시작 전 주의사항
+1. **Bootstrap Layer**
+   Terraform state를 로컬 파일이 아니라 AWS S3와 DynamoDB에서 안전하게 관리하기 위한 초기 리소스를 생성합니다.
 
-* `terraform.tfvars` 파일의 값을 **본인 환경에 맞게 수정**해야 합니다.
-* Terraform 실행 위치:
+2. **Environment Layer**
+   `environments/dev`에서 실제 개발 환경 인프라를 조합합니다. 환경별 설정과 공통 모듈을 분리해 재사용성을 높였습니다.
 
-  ```bash
-  environments/dev/*
-  ```
-* Bastion Host 설정:
+3. **Module Layer**
+   네트워크, 컴퓨팅, 데이터베이스, 레지스트리, 스토리지, IAM을 각각 독립 모듈로 구성해 유지보수성과 확장성을 확보했습니다.
 
-  * 본인의 **공인 IP**
-  * 생성한 **Key Pair 이름**
-    → 반드시 수정 필요
+4. **Delivery Layer**
+   GitHub Actions가 Terraform `fmt`, `validate`, `plan`, `apply`를 수행하며, AWS 자격 증명은 Access Key 대신 OIDC 기반 Assume Role 방식으로 연결합니다.
 
-* bootstrap/backend/terraform.tfvars 설정:
+## Key Design Points
 
-  * s3 버킷 이름 **본인 ID or 본인이 사용할 버킷 이름으로 변경**
+### 1. Modular Terraform Structure
 
-* .github/workflows 파일 설정:
+리소스를 한 파일에 몰아넣지 않고 역할별 모듈로 분리했습니다.
 
-  * workflow 설정 **본인 github 및 oidc 설정 이후 role에 맞게 설정**
+- `modules/vpc`: VPC, 서브넷, IGW, NAT Gateway, Route Table
+- `modules/bastion`: 운영 접속용 EC2 및 보안 그룹
+- `modules/eks`: EKS 클러스터, Node Group, 보안 그룹, 접근 정책
+- `modules/rds`: DB Subnet Group, Parameter Group, Option Group, RDS 인스턴스
+- `modules/ecr`: 컨테이너 이미지 레포지토리와 Lifecycle Policy
+- `modules/s3`: 업로드 정책과 공개 읽기 정책을 가진 S3 버킷
+- `modules/iam`: EKS OIDC 기반 Cluster Autoscaler용 IAM 리소스
 
----
+### 2. Network Segmentation
 
-## 🏗️ 1. Backend 인프라 구성 (State 관리)
+퍼블릭과 프라이빗 계층을 분리해 역할에 맞는 네트워크 경계를 구성했습니다.
 
-Terraform State를 안전하게 관리하기 위한 구성입니다.
+- Public Subnet: Bastion, NAT Gateway
+- Private App Subnet: EKS Node Group
+- Private DB Subnet: RDS
 
-### 📦 구성 요소
+이 구조를 통해 외부 노출이 필요한 리소스와 내부 전용 리소스를 분리하고, DB는 Bastion 및 EKS 노드 보안 그룹만 접근할 수 있도록 제한했습니다.
 
-* **S3 Bucket**
+### 3. Remote State Management
 
-  * Terraform State 저장
-* **DynamoDB Table**
+`bootstrap/backend`는 Terraform state 관리 전용 영역입니다.
 
-  * State Lock 관리 (동시 작업 충돌 방지)
+- S3 Bucket: state 파일 저장
+- DynamoDB Table: state lock 관리
+- 버전 관리 및 서버 측 암호화 적용
 
----
+Terraform 프로젝트를 실제 협업 가능한 형태로 운영하기 위해 가장 먼저 필요한 기반을 별도 레이어로 분리한 점이 이 프로젝트의 중요한 설계 포인트입니다.
 
-### 🔄 작업 순서
+### 4. GitHub Actions + OIDC
 
-1. `bootstrap` 폴더에서 초기 인프라 생성
-2. S3 Bucket 생성 (State 저장용)
-3. DynamoDB Table 생성 (Lock 관리)
-4. `environments/dev`에 backend 설정 추가
-5. `terraform init` 실행 (State Migration)
+GitHub Actions 워크플로우는 `environments/dev`와 `modules` 변경을 감지해 Terraform 검증을 수행합니다.
 
----
+- Pull Request: `terraform plan`
+- Main 브랜치 Push: `terraform plan`
+- Manual Dispatch: `plan` 또는 `apply`
 
-### 💡 State Migration 설명
+AWS 인증은 장기 Access Key를 저장하지 않고, GitHub Actions가 OIDC로 IAM Role을 Assume 하도록 구성했습니다.  
+즉, 인프라 자동화와 보안 요구사항을 함께 고려한 구조입니다.
 
-* 기존: 로컬 `tfstate`
-* 변경: S3 기반 원격 저장
+## Directory Structure
 
-👉 이후:
-
-* 로컬 & GitHub Actions가 동일한 State 공유
-
----
-
-### ⚙️ 실행 명령어
-
-```bash
-cd bootstrap/backend
-
-terraform init
-terraform fmt -recursive
-terraform validate
-terraform apply -var-file="terraform.tfvars"
-```
-
-> ⚠️ 이미 로컬에서 인프라를 생성한 경우에만 Migration 필요
-
----
-
-## 🔐 2. OIDC 인증 설정 (GitHub Actions)
-
-AWS Access Key 없이 GitHub Actions에서 AWS 접근을 가능하게 합니다.
-
----
-
-### 🔁 인증 흐름
-
-```
-GitHub Actions 실행
-→ OIDC 토큰 발급
-→ AWS IAM 검증
-→ IAM Role Assume
-→ 임시 자격증명 발급
-```
-
----
-
-### 🧩 설정 단계
-
-#### 1. OIDC Provider 생성
-
-* Provider URL:
-
-  ```
-  token.actions.githubusercontent.com
-  ```
-* Audience:
-
-  ```
-  sts.amazonaws.com
-  ```
-
----
-
-#### 2. IAM Role 생성 (Trust Policy)
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "GitHubActionsOIDC",
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::398875891485:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": [
-            "repo:WoojuHwww/terraform-gitops:ref:refs/heads/main",
-            "repo:WoojuHwww/terraform-gitops:pull_request"
-          ]
-        }
-      }
-    }
-  ]
-}
-```
-
----
-
-### 📌 핵심 설정 요약
-
-* GitHub OIDC Provider를 신뢰
-* `sts.amazonaws.com` Audience만 허용
-* 특정 Repository만 허용
-* `main` 브랜치 및 PR 이벤트만 허용
-
----
-
-## ⚙️ 3. Terraform 운영 명령어
-
-### 🎯 특정 리소스만 생성 (Target Apply)
-
-```bash
-terraform apply -target=module.vpc -var-file="terraform.tfvars"
-terraform apply -target=module.rds -var-file="terraform.tfvars"
-terraform apply -target=module.bastion -var-file="terraform.tfvars"
-terraform apply -target=module.eks -var-file="terraform.tfvars"
-terraform apply -target=module.ecr -var-file="terraform.tfvars"
-```
-
----
-
-## 🛢️ 4. RDS 접속 방법
-
-### 📍 Step 1. Bastion Host 접속
-
-* Putty 또는 SSH 사용
-
----
-
-### 📦 Step 2. MySQL Client 설치
-
-```bash
-sudo dnf install -y wget
-
-wget https://repo.mysql.com/mysql80-community-release-el9-1.noarch.rpm
-
-sudo dnf install -y mysql80-community-release-el9-1.noarch.rpm
-sudo dnf install -y mysql-community-client
-```
-
----
-
-### 🔌 Step 3. RDS 접속
-
-```bash
-mysql -h dev-mysql.cxisck4ewfvd.ap-northeast-2.rds.amazonaws.com \
-      -P 3306 \
-      -u admin \
-      -p
-```
-
----
-
-## 🧠 추가 참고
-
-* GitOps 기반으로 모든 인프라 변경은 **코드 → PR → Apply** 흐름으로 관리
-* State 충돌 방지를 위해 반드시 DynamoDB Lock 사용
-* OIDC를 통해 **Access Key 없이 안전한 인증 구조 유지**
-
----
-
-## 📎 디렉터리 구조 (예시)
-
-```
+```text
 .
-├── bootstrap/
-│   └── backend/
-├── environments/
-│   └── dev/
-├── modules/
-├── .github/workflows/
-└── terraform.tfvars
+|-- .github/
+|   `-- workflows/
+|       |-- terraform-dev.yml
+|       `-- terraform-destroy.yml
+|-- bootstrap/
+|   `-- backend/
+|       |-- main.tf
+|       |-- variables.tf
+|       `-- outputs.tf
+|-- environments/
+|   `-- dev/
+|       |-- backend.tf
+|       |-- main.tf
+|       |-- variables.tf
+|       `-- outputs.tf
+|-- modules/
+|   |-- bastion/
+|   |-- ecr/
+|   |-- eks/
+|   |-- iam/
+|   |-- rds/
+|   |-- s3/
+|   `-- vpc/
+`-- README.md
 ```
 
----
+## Provisioned Resources
 
-## ✅ TODO (확장 가능)
+### VPC
 
-* [ ] Helm Chart 연동
-* [ ] ArgoCD GitOps 확장
-* [ ] Monitoring (Prometheus / Grafana)
-* [ ] CI/CD Pipeline 고도화
+- DNS hostnames / DNS support 활성화
+- Public / Private App / Private DB 서브넷 분리
+- Internet Gateway 및 NAT Gateway 구성
+- EKS 연동을 위한 subnet tagging 적용
 
----
+### Bastion
+
+- Public Subnet에 배치된 Amazon Linux 기반 EC2
+- 허용된 CIDR에 대해서만 SSH 접근 허용
+- Private RDS 접근을 위한 운영 점프 서버 역할
+
+### EKS
+
+- 별도 IAM Role을 가진 EKS Cluster
+- Launch Template 기반 Managed Node Group
+- Access Entry와 Cluster Admin Policy Association 구성
+- Cluster Autoscaler 연동을 고려한 태그 부여
+
+### RDS
+
+- Private DB Subnet에 배치
+- DB Subnet Group, Parameter Group, Option Group 지원
+- Bastion / EKS Node Security Group만 접근 가능
+- 백업, 성능 옵션, 삭제 보호 등 운영 속성 확장 가능
+
+### ECR
+
+- 복수 레포지토리 생성 가능
+- Push 시 이미지 스캔
+- Lifecycle Policy를 통한 이미지 정리 자동화
+
+### S3
+
+- 서버 측 암호화 적용
+- 특정 업로더 ARN에 `ListBucket`, `PutObject`, `DeleteObject` 권한 부여
+- Object Public Read 정책 구성
+
+## Workflow
+
+이 레포는 다음 순서로 운영되도록 설계되었습니다.
+
+1. `bootstrap/backend`에서 remote state 인프라를 먼저 생성
+2. `environments/dev`에서 실제 개발 환경 인프라 구성
+3. GitHub Actions가 변경 사항을 검증하고 필요 시 수동 적용
+4. 애플리케이션은 ECR, EKS, S3 등과 연동해 배포 기반을 활용
+
+## What This Repository Shows
+
+포트폴리오 관점에서 이 레포는 다음 역량을 보여주기 위한 프로젝트입니다.
+
+- Terraform 모듈 설계 및 환경 분리 능력
+- AWS 네트워크, 컴퓨팅, 데이터베이스 리소스 설계 경험
+- 원격 state 및 협업 가능한 IaC 구조에 대한 이해
+- GitHub Actions와 OIDC를 활용한 안전한 인프라 자동화 구성
+- 단순 실습이 아니라 운영 관점의 보안 경계와 배포 흐름을 고려한 설계
+
+## Future Improvements
+
+- `staging`, `prod` 환경 추가
+- Helm / ArgoCD 기반 GitOps 확장
+- Monitoring stack(Prometheus, Grafana) 연동
+- Secrets 관리 체계 개선
+- 재사용 가능한 공통 CI 파이프라인 템플릿화
+
+## Tech Stack
+
+- Terraform
+- AWS
+- Amazon VPC
+- Amazon EKS
+- Amazon RDS
+- Amazon ECR
+- Amazon S3
+- AWS IAM / OIDC
+- GitHub Actions
