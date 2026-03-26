@@ -63,7 +63,6 @@ GitHub Actions + OIDC 기반으로 **안전하게 자동화된 인프라 운영 
 
 ## 📁 Directory Structure
 
-
 ```text
 .
 ├── .github/workflows        # CI/CD (Terraform 실행)
@@ -82,17 +81,18 @@ GitHub Actions + OIDC 기반으로 **안전하게 자동화된 인프라 운영 
 
 ---
 
-## 🌐 Infrastructure Design
+🌐 Infrastructure Design
 
-### 🧭 Network Segmentation
+🧭 Network Segmentation
 
-| Layer | 구성 |
-|------|------|
-| Public | Bastion, NAT Gateway |
-| Private App | EKS Node |
-| Private DB | RDS |
+| Layer       | 구성                   |
+| ----------- | -------------------- |
+| Public      | Bastion, NAT Gateway |
+| Private App | EKS Node             |
+| Private DB  | RDS                  |
 
-✔ 외부 노출 최소화  
+
+✔ 외부 노출 최소화
 ✔ DB는 내부에서만 접근 가능
 
 ---
